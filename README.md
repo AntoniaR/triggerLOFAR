@@ -1,0 +1,1 @@
+This is an example code to trigger LOFAR observations on a short GRB detected by the Swift Satellite. We use the 4PiSky tools to listen for VOEvents.
