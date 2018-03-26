@@ -12,6 +12,7 @@ import six
 import voeventparse
 import pandas
 import requests
+import xml.etree.ElementTree as ET
 #from fourpiskytools.notify import Notifier
 
 
@@ -27,7 +28,7 @@ global ObsMax, ObsMin, AltCut, MaxDwell, Name, email, phoneNumber, Affiliation, 
 
 ObsMax= 120. #time in minutes
 ObsMin= 30.
-AltCut=20. #minimum elevation for observations in degrees
+AltCut=10. #minimum elevation for observations in degrees
 MaxDwell=5. # maximum dwell time in minutes
 
 Name = "Antonia Rowlinson"
@@ -59,8 +60,8 @@ def handle_voevent(v):
     # edited
     if is_grb(v):
         RA, Dec, time, parameters = handle_grb(v)
-        logger.info(time+','+str(RA)+','+str(Dec))
-        #filterSGRBs(RA, Dec, time, parameters)
+#        logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+','+format(time)+','+str(RA)+','+str(Dec)+','+format(parameters[None]['Integ_Time']['value'])+','+format(parameters['Misc_Flags']['Delayed_Transmission']['value']))
+        filterSGRBs(RA, Dec, time, parameters)
     elif is_swift_pointing(v):        
         handle_pointing(v)
     elif is_ping_packet(v):
@@ -100,16 +101,13 @@ def handle_grb(v):
     # edited
     ivorn = v.attrib['ivorn']
     coords = voeventparse.get_event_position(v)
-    logger.info(str(coords.ra)+','+str(coords.dec))
-    RA=coords.ra
-    Dec=coords.dec
+    ra=coords.ra
+    dec=coords.dec
     time = voeventparse.convenience.get_event_time_as_utc(v, index=0) # this is a datetime.datetime object
-    logger.info(time)
     parameters = voeventparse.convenience.pull_params(v) 
-    integ_time = parameters[None]['Integ_Time']['value']
-    logger.info(integ_time)
-    text = "Swift packet received, coords are {}".format(coords)
-    logger.info(text)
+#    integ_time = parameters[None]['Integ_Time']['value']
+#    text = "Swift packet received, coords are {}".format(coords)
+#    logger.info(text)
     handle_other(v)
     return ra, dec, time, parameters
 
@@ -123,7 +121,7 @@ def handle_pointing(v):
 
 def handle_ping_packet(v):
    logger.info("Packet received matches 'ping packet' filter.")
-    handle_other(v)
+   handle_other(v)
 
 def handle_other(v):
     ivorn = v.attrib['ivorn']
@@ -134,27 +132,38 @@ def handle_other(v):
 
 def filterSGRBs(RA, Dec, time, parameters):
     # Trig_dur needs to be less than the input, readFromEvent needs to be checked.
-    logger.info('In SGRB filtering code')
-    if float(parameters[None]['Integ_Time']['value']) < GRB_trig_dur:
-        # calculate time of event in mjds
-        logger.info('Integration time check passed. '+str(parameters[None]['Integ_Time']['value'])+','+str(GRB_trig_dur))
-        mjds=86400.*tkpcoords.julian_date(time,modified=True)
-        # Altitude needs to be greater than the input
-        #calcAlt =  tkpcoords.altaz(mjds, RA, Dec lat=52.9088)[0]
-        logger.info('Checking altitude')
-        #if calcAlt > AltCut:
-        # Source needs to stay above horizon
-        logger.info('Index from altitude check: '+str(index))
-        index = horizon(mjds,RA, Dec)
-        if index != 0:
-            # we need a calibrator source
-            calibrator = find_cal(mjds,RA, Dec,index)
-            if calibrator['Calibrators'] != 'None':
-                logger.info('Calibrator found: '+str(calibrator['Calibrators']))
-                xmlname = writeXMLfiles(time,RA, Dec,calibrator,index)
-                logger.info('XML file written to: '+xmlname)
-                #sendXMLtoLOFAR(xmlname)
-                
+    logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'In SGRB filtering code')
+    if parameters['Misc_Flags']['Delayed_Transmission']['value'] != False: #first only trigger on non-delayed bursts
+        logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'prompt transmission')
+        if float(parameters[None]['Integ_Time']['value']) < GRB_trig_dur:
+            # calculate time of event in mjds
+            logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Integration time check passed. '+str(parameters[None]['Integ_Time']['value'])+','+str(GRB_trig_dur))
+            mjds=86400.*tkpcoords.julian_date(time,modified=True)
+            # Altitude needs to be greater than the input
+            calcAlt =  tkpcoords.altaz(mjds, RA, Dec, lat=52.9088)[0]
+            logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Checking altitude: '+str(calcAlt)+','+str(AltCut))
+            if calcAlt > AltCut:
+                # Source needs to stay above horizon
+                index = horizon(mjds,RA, Dec)
+                logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Index from altitude check: '+str(index))
+                if index != 0:
+                    # we need a calibrator source
+                    calibrator = find_cal(mjds,RA, Dec,index)
+                    if calibrator['Calibrators'] != 'None':
+                        logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Calibrator found: '+str(calibrator['Calibrators']))
+                        xmlname = writeXMLfiles(format(parameters[None]['TrigID']['value']),time,RA, Dec,calibrator,index)
+                        logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'XML file written to: '+xmlname)
+                        #sendXMLtoLOFAR(xmlname)
+                    else:
+                        logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Failed to find a calibrator')
+                else:
+                    logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Not above horizon within time constraints')
+            else:
+                logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Below horizon')
+        else:
+            logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Likely long GRB')
+    else:
+        logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Delayed trigger')
 
 ################# Check the elevation of the source #################
 
@@ -238,7 +247,7 @@ def find_cal(mjds,RA, Dec, index):
 
 
 ################# Write the XML for LOFAR #################
-def generateXML(RA,Dec,CalRA,CalDec,start,maxDur,minDur):
+def generateXML(GRB,RA,Dec,CalRA,CalDec,start,maxDur,minDur):
     # this is particularly ugly so I suspect there is a better way?
     
     tree = ET.parse('template1.xml')
@@ -289,7 +298,7 @@ def generateXML(RA,Dec,CalRA,CalDec,start,maxDur,minDur):
     tree.write(str(RA)+'_'+str(Dec)+'.xml')
     return str(RA)+'_'+str(Dec)+'.xml'
 
-def writeXMLfiles(time,RA, Dec,calibrator,index):
+def writeXMLfiles(GRB,time,RA, Dec,calibrator,index):
     if index != 0:
         starttime = time
         if index == 1:
@@ -306,7 +315,7 @@ def writeXMLfiles(time,RA, Dec,calibrator,index):
             starttime=starttime+timedelta(seconds=MaxDwell*60.)
             start=starttime.strftime("%Y-%m-%dT%H%M%S")
             maxDur = ObsMin
-        xmlname = generateXML(RA,Dec,calibrator['CalRA'],calibrator['CalDec'],start,maxDur,ObsMin)
+        xmlname = generateXML(GRB,RA,Dec,calibrator['CalRA'],calibrator['CalDec'],start,maxDur,ObsMin)
         return xmlname
 
 #test generateXML
