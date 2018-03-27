@@ -58,15 +58,20 @@ def main():
 
 def handle_voevent(v):
     # edited
+    #logger.info(format(v.attrib['ivorn']))
     if is_grb(v):
+        #logger.info('is GRB')
         RA, Dec, time, parameters = handle_grb(v)
 #        logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+','+format(time)+','+str(RA)+','+str(Dec)+','+format(parameters[None]['Integ_Time']['value'])+','+format(parameters['Misc_Flags']['Delayed_Transmission']['value']))
         filterSGRBs(RA, Dec, time, parameters)
-    elif is_swift_pointing(v):        
+    elif is_swift_pointing(v):
+        #logger.info('is Swift pointing')
         handle_pointing(v)
     elif is_ping_packet(v):
+        #logger.info('is ping packet')
         handle_ping_packet(v)
     else:
+        #logger.info('is something else')
         handle_other(v)
         
 def is_grb(v):
@@ -74,9 +79,7 @@ def is_grb(v):
     ivorn = v.attrib['ivorn']
     if ivorn.find("ivo://nasa.gsfc.gcn/SWIFT#BAT_GRB_Pos") == 0:
         return True
-    if ivorn.find("ivo://nasa.gsfc.gcn/SWIFT#BAT_GRB_Test_Pos") == 0: ##
-        return True
-    if ivorn.startswith("ivo://nasa.gsfc.gcn/SWIFT#BAT_SubSubThresh_Pos") == 0: ##
+    if ivorn.find("ivo://nasa.gsfc.gcn/SWIFT#BAT_SubSubThresh_Pos") == 0: ##
         return True
     return False
 
@@ -99,6 +102,7 @@ def is_ping_packet(v):
 
 def handle_grb(v):
     # edited
+    #logger.info('in handle grb')
     ivorn = v.attrib['ivorn']
     coords = voeventparse.get_event_position(v)
     ra=coords.ra
@@ -108,24 +112,25 @@ def handle_grb(v):
 #    integ_time = parameters[None]['Integ_Time']['value']
 #    text = "Swift packet received, coords are {}".format(coords)
 #    logger.info(text)
-    handle_other(v)
+#    handle_other(v)
     return ra, dec, time, parameters
 
 def handle_pointing(v):
+    #logger.info('in handle pointing')
     ivorn = v.attrib['ivorn']
-    coords = voeventparse.pull_astro_coords(v)
+    coords = voeventparse.get_event_position(v)
     text = "Swift repointing, coords are {}".format(coords)
-    logger.info(text)
-    handle_other(v)
-    return coords
+    #logger.info(text)
+    #handle_other(v)
+    #return 
 
 def handle_ping_packet(v):
-   logger.info("Packet received matches 'ping packet' filter.")
+   #logger.info("Packet received matches 'ping packet' filter.")
    handle_other(v)
 
 def handle_other(v):
-    ivorn = v.attrib['ivorn']
-    logger.info("VOEvent received. IVORN: "+ivorn)
+    #ivorn = v.attrib['ivorn']
+    #logger.info("VOEvent received. IVORN: "+ivorn)
 
     
 ################# Filter the possible short GRBs and send alert #################
@@ -133,6 +138,7 @@ def handle_other(v):
 def filterSGRBs(RA, Dec, time, parameters):
     # Trig_dur needs to be less than the input, readFromEvent needs to be checked.
     logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'In SGRB filtering code')
+    logger.info(format(parameters['Misc_Flags']['Delayed_Transmission']['value']))
     if parameters['Misc_Flags']['Delayed_Transmission']['value'] != False: #first only trigger on non-delayed bursts
         logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'prompt transmission')
         if float(parameters[None]['Integ_Time']['value']) < GRB_trig_dur:
