@@ -35,7 +35,7 @@ Name = "Antonia Rowlinson"
 email = "rowlinson@astron.nl"
 phoneNumber = "799"
 Affiliation = "ASTRON"
-ProjectCode='LC7_030'
+ProjectCode='Test'
 GRB_trig_dur = 1.
 
 #################
@@ -61,9 +61,9 @@ def handle_voevent(v):
     #logger.info(format(v.attrib['ivorn']))
     if is_grb(v):
         #logger.info('is GRB')
-        RA, Dec, time, parameters = handle_grb(v)
+        RA, Dec, time, parameters, ivorn = handle_grb(v)
 #        logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+','+format(time)+','+str(RA)+','+str(Dec)+','+format(parameters[None]['Integ_Time']['value'])+','+format(parameters['Misc_Flags']['Delayed_Transmission']['value']))
-        filterSGRBs(RA, Dec, time, parameters)
+        filterSGRBs(RA, Dec, time, parameters, ivorn)
     elif is_swift_pointing(v):
         #logger.info('is Swift pointing')
         handle_pointing(v)
@@ -104,6 +104,7 @@ def handle_grb(v):
     # edited
     #logger.info('in handle grb')
     ivorn = v.attrib['ivorn']
+    logger.info("VOEvent received. IVORN: "+ivorn)
     coords = voeventparse.get_event_position(v)
     ra=coords.ra
     dec=coords.dec
@@ -113,7 +114,7 @@ def handle_grb(v):
 #    text = "Swift packet received, coords are {}".format(coords)
 #    logger.info(text)
 #    handle_other(v)
-    return ra, dec, time, parameters
+    return ra, dec, time, parameters, ivorn
 
 def handle_pointing(v):
     #logger.info('in handle pointing')
@@ -129,17 +130,16 @@ def handle_ping_packet(v):
    handle_other(v)
 
 def handle_other(v):
-    #ivorn = v.attrib['ivorn']
+    ivorn = v.attrib['ivorn']
     #logger.info("VOEvent received. IVORN: "+ivorn)
 
     
 ################# Filter the possible short GRBs and send alert #################
 
-def filterSGRBs(RA, Dec, time, parameters):
+def filterSGRBs(RA, Dec, time, parameters,ivorn):
     # Trig_dur needs to be less than the input, readFromEvent needs to be checked.
     logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'In SGRB filtering code')
-    logger.info(format(parameters['Misc_Flags']['Delayed_Transmission']['value']))
-    if parameters['Misc_Flags']['Delayed_Transmission']['value'] != False: #first only trigger on non-delayed bursts
+    if (parameters['Misc_Flags']['Delayed_Transmission']['value'] != False or ivorn.find("ivo://nasa.gsfc.gcn/SWIFT#BAT_SubSubThresh_Pos") == 0): #first only trigger on non-delayed bursts
         logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'prompt transmission')
         if float(parameters[None]['Integ_Time']['value']) < GRB_trig_dur:
             # calculate time of event in mjds
