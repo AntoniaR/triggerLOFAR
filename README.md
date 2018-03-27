@@ -48,7 +48,9 @@ TrigID: 817345, Integration time check passed. 0.512,1.0
 TrigID: 817345, Checking altitude: 26.4376522849,10.0
 TrigID: 817345, Index from altitude check: 1
 TrigID: 817345, Calibrator found: 3C147
-TrigID: 817345, XML file written to: 817345.xml```
+TrigID: 817345, XML file written to: 817345.xml
+```
+
 This output will be on both the terminal and in a logfile called sgrb_swift.log.
 It will also produce the triggering xml file with the name being the Trigger ID of the transient source from the satellite.
 
