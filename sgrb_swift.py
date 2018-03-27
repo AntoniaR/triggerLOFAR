@@ -302,7 +302,7 @@ def generateXML(GRB,RA,Dec,CalRA,CalDec,start,maxDur,minDur):
                         for child5 in child3.findall('dec'):
                             child5.text = str(CalDec)
     tree.write(str(RA)+'_'+str(Dec)+'.xml')
-    return str(RA)+'_'+str(Dec)+'.xml'
+    return str(GRB)+'.xml'
 
 def writeXMLfiles(GRB,time,RA, Dec,calibrator,index):
     if index != 0:
