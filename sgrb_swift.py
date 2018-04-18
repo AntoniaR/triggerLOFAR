@@ -5,6 +5,7 @@ import scipy as sp
 import os
 from datetime import datetime
 from datetime import timedelta
+from datetime import time
 import tkp.utility.coordinates as tkpcoords
 import logging
 import sys
@@ -12,7 +13,13 @@ import six
 import voeventparse
 import pandas
 import requests
-import xml.etree.ElementTree as ET
+#import xml.etree.ElementTree as ET
+from lxml import etree as ET
+
+import astropy.units as u
+from astropy.time import Time
+from astropy.coordinates import SkyCoord, EarthLocation, AltAz 
+
 #from fourpiskytools.notify import Notifier
 
 
@@ -24,19 +31,25 @@ import xml.etree.ElementTree as ET
 
 
 # Some variables that I need everywhere, so to make life easier...
-global ObsMax, ObsMin, AltCut, MaxDwell, Name, email, phoneNumber, Affiliation, ProjectCode, GRB_trig_dur
+global ObsMax, ObsMin, AltCut, MaxDwell, Name, email, phoneNumber, Affiliation, ProjectCode, GRB_trig_dur, template, username,LOFARlocation
 
 ObsMax= 120. #time in minutes
 ObsMin= 30.
-AltCut=10. #minimum elevation for observations in degrees
-MaxDwell=5. # maximum dwell time in minutes
+AltCut=15. #minimum elevation for observations in degrees
+MaxDwell=8. # maximum dwell time in minutes
+MinDwell=4. # minimum dwell time (while testing)
+LOFARlocation = EarthLocation(lat=52.9088*u.deg,lon=6.8689*u.deg,height=0.*u.m)
+CalObsT = 10.
 
-Name = "Antonia Rowlinson"
-email = "rowlinson@astron.nl"
-phoneNumber = "799"
-Affiliation = "ASTRON"
-ProjectCode='Test'
-GRB_trig_dur = 1.
+Name = "<input>"
+username = '<input>'
+email = "<input>"
+phoneNumber = "<input>"
+Affiliation = "<input>"
+ProjectCode = '<input>'
+#ProjectCode = 'test-triggers-low'
+GRB_trig_dur = 100.
+template = 'sgrb_template.xml'
 
 #################
 # This code is edited from Tim's example here: https://github.com/4pisky/fourpiskytools/blob/master/examples/process_voevent_from_stdin_2.py
@@ -56,14 +69,21 @@ def main():
     handle_voevent(v)  
     return 0
 
+def calcAltAz(time,RA,Dec):
+    time = Time(time.strftime("%Y-%m-%d %H:%M:%S"))
+    position = SkyCoord(RA,Dec,unit='deg')
+    AltAzPos = position.transform_to(AltAz(obstime=time,location=LOFARlocation))
+    return AltAzPos.alt.deg
+    
+
 def handle_voevent(v):
     # edited
     #logger.info(format(v.attrib['ivorn']))
     if is_grb(v):
         #logger.info('is GRB')
         RA, Dec, time, parameters, ivorn = handle_grb(v)
-#        logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+','+format(time)+','+str(RA)+','+str(Dec)+','+format(parameters[None]['Integ_Time']['value'])+','+format(parameters['Misc_Flags']['Delayed_Transmission']['value']))
-        filterSGRBs(RA, Dec, time, parameters, ivorn)
+        logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+','+format(time)+','+str(RA)+','+str(Dec)+','+format(parameters[None]['Integ_Time']['value'])+','+format(parameters['Misc_Flags']['Delayed_Transmission']['value']))
+        filterSGRBs(RA, Dec, time, parameters, v)
     elif is_swift_pointing(v):
         #logger.info('is Swift pointing')
         handle_pointing(v)
@@ -79,8 +99,8 @@ def is_grb(v):
     ivorn = v.attrib['ivorn']
     if ivorn.find("ivo://nasa.gsfc.gcn/SWIFT#BAT_GRB_Pos") == 0:
         return True
-    if ivorn.find("ivo://nasa.gsfc.gcn/SWIFT#BAT_SubSubThresh_Pos") == 0: ##
-        return True
+    #if ivorn.find("ivo://nasa.gsfc.gcn/SWIFT#BAT_SubSubThresh_Pos") == 0: ##
+    #    return True
     return False
 
 def is_swift_pointing(v):        
@@ -136,48 +156,50 @@ def handle_other(v):
     
 ################# Filter the possible short GRBs and send alert #################
 
-def filterSGRBs(RA, Dec, time, parameters,ivorn):
+def filterSGRBs(RA, Dec, time, parameters,v):
     # Trig_dur needs to be less than the input, readFromEvent needs to be checked.
     logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'In SGRB filtering code')
-    if (parameters['Misc_Flags']['Delayed_Transmission']['value'] != False or ivorn.find("ivo://nasa.gsfc.gcn/SWIFT#BAT_SubSubThresh_Pos") == 0): #first only trigger on non-delayed bursts
-        logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'prompt transmission')
-        if float(parameters[None]['Integ_Time']['value']) < GRB_trig_dur:
-            # calculate time of event in mjds
-            logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Integration time check passed. '+str(parameters[None]['Integ_Time']['value'])+','+str(GRB_trig_dur))
-            mjds=86400.*tkpcoords.julian_date(time,modified=True)
-            # Altitude needs to be greater than the input
-            calcAlt =  tkpcoords.altaz(mjds, RA, Dec, lat=52.9088)[0]
-            logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Checking altitude: '+str(calcAlt)+','+str(AltCut))
-            if calcAlt > AltCut:
-                # Source needs to stay above horizon
-                index = horizon(mjds,RA, Dec)
-                logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Index from altitude check: '+str(index))
-                if index != 0:
-                    # we need a calibrator source
-                    calibrator = find_cal(mjds,RA, Dec,index)
-                    if calibrator['Calibrators'] != 'None':
-                        logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Calibrator found: '+str(calibrator['Calibrators']))
-                        xmlname = writeXMLfiles(format(parameters[None]['TrigID']['value']),time,RA, Dec,calibrator,index)
-                        logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'XML file written to: '+xmlname)
-                        #sendXMLtoLOFAR(xmlname)
-                    else:
-                        logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Failed to find a calibrator')
+#    if (parameters['Misc_Flags']['Delayed_Transmission']['value'] != False): #first only trigger on non-delayed bursts
+        #logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'prompt transmission')
+    if float(parameters[None]['Integ_Time']['value']) < GRB_trig_dur:
+        # calculate time of event in mjds
+        logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Integration time check passed. '+str(parameters[None]['Integ_Time']['value'])+','+str(GRB_trig_dur))
+        #mjds=86400.*tkpcoords.julian_date(time,modified=True)
+        # Altitude needs to be greater than the input
+        calcAlt =  calcAltAz(time,RA,Dec) #tkpcoords.altaz(mjds, RA, Dec, lat=52.9088)[0]
+        logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Checking altitude: '+str(calcAlt)+','+str(AltCut))
+        if calcAlt > AltCut:
+            # Source needs to stay above horizon
+            index = horizon(time,RA, Dec)
+            logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Index from altitude check: '+str(index))
+            if index != 0:
+                # we need a calibrator source
+                calibrator = find_cal(time,RA, Dec,index)
+                if calibrator['Calibrators'] != 'None':
+                    logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Calibrator found: '+str(calibrator['Calibrators'])+','+str(calibrator['CalRA'])+','+str(calibrator['CalDec']))
+                    xmlname = writeXMLfiles(format(parameters[None]['TrigID']['value']),time,RA, Dec,calibrator,index)
+                    logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'XML file written to: '+xmlname)
+                    sendXMLtoLOFAR(xmlname)
                 else:
-                    logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Not above horizon within time constraints')
+                    logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Failed to find a calibrator')
             else:
-                logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Below horizon')
+                logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Not above horizon within time constraints')
         else:
-            logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Likely long GRB')
+            logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Below horizon')
     else:
-        logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Delayed trigger')
+        logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Likely long GRB, '+format(parameters[None]['Integ_Time']['value']))
+    #else:
+    #    logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Delayed trigger')
 
 ################# Check the elevation of the source #################
 
-def horizon(mjds,RA,Dec):
-            az0=tkpcoords.altaz(mjds+(60.*(MaxDwell)), RA, Dec, lat=52.9088)[0]
-            az0b=tkpcoords.altaz(mjds, RA, Dec, lat=52.9088)[0]
-            az2=tkpcoords.altaz(mjds+(60.*(ObsMax+MaxDwell)), RA, Dec, lat=52.9088)[0]
-            az1=tkpcoords.altaz(mjds+(60.*(ObsMin+MaxDwell)), RA, Dec, lat=52.9088)[0]
+def horizon(time,RA,Dec):
+            az0=calcAltAz(time+timedelta(minutes=MaxDwell),RA,Dec) #tkpcoords.altaz(mjds+(60.*(MaxDwell)), RA, Dec, lat=52.9088)[0]
+            az0b=calcAltAz(time+timedelta(minutes=MaxDwell),RA,Dec) #tkpcoords.altaz(mjds, RA, Dec, lat=52.9088)[0]
+            az2=calcAltAz(time+timedelta(minutes=(MaxDwell+ObsMax)),RA,Dec) #tkpcoords.altaz(mjds+(60.*(ObsMax+MaxDwell)), RA, Dec, lat=52.9088)[0]
+            az1=calcAltAz(time+timedelta(minutes=(MaxDwell+ObsMin)),RA,Dec) #tkpcoords.altaz(mjds+(60.*(ObsMin+MaxDwell)), RA, Dec, lat=52.9088)[0]
+            #logger.info(format(mjds)+','+format(mjds+60.*(MaxDwell))+','+format(MaxDwell))
+            logger.info(format(az0)+','+format(az0b)+','+format(az2)+','+format(az1))
             if az0<AltCut: # the source is below minimum at start
                 return 0   
             if az0b>AltCut: # wait till dwell time to start observations
@@ -207,31 +229,40 @@ def horizon(mjds,RA,Dec):
  
   
 
-def find_cal(mjds,RA, Dec, index):
+def find_cal(time,RA, Dec, index):
     calibrators=pandas.read_csv('calibrators.csv',sep=',',header=0)
     separation=648000.
     for index2, cal in calibrators.iterrows():
         septmp = tkpcoords.angsep(RA, Dec, float(cal.ra), float(cal.dec))
+        startT = time+timedelta(minutes=MinDwell)
         if index == 1:
-            mjds_start = mjds
-            mjds_end = mjds+(60.*(MaxDwell+ObsMax))
+            timeStart = startT+timedelta(minutes=ObsMax+MaxDwell+2.)
+            timeEnd = timeStart+timedelta(minutes=CalObsT)
+            #mjds_start = mjds
+            #mjds_end = mjds+(60.*(MaxDwell+ObsMax))
         elif index == 2:
-            mjds_start = mjds
-            mjds_end = mjds+(60.*(MaxDwell+ObsMin))            
+            timeStart = startT+timedelta(minutes=ObsMin+MaxDwell+2.)
+            timeEnd = timeStart+timedelta(minutes=CalObsT)
+            #mjds_start = mjds
+            #mjds_end = mjds+(60.*(MaxDwell+ObsMin))            
         elif index == 3:
-            mjds_start = mjds+(60.*(MaxDwell))  
-            mjds_end = mjds+(60.*(MaxDwell+ObsMax))              
+            timeStart = startT+timedelta(minutes=ObsMax+MaxDwell+2.)
+            timeEnd = timeStart+timedelta(minutes=CalObsT)
+            #mjds_start = mjds+(60.*(MaxDwell))  
+            #mjds_end = mjds+(60.*(MaxDwell+ObsMax))              
         elif index == 4:
-            mjds_start = mjds+(60.*(MaxDwell))
-            mjds_end = mjds+(60.*(MaxDwell+ObsMin))      
+            timeStart = startT+timedelta(minutes=ObsMin+MaxDwell+2.)
+            timeEnd = timeStart+timedelta(minutes=CalObsT)
+            #mjds_start = mjds+(60.*(MaxDwell))
+            #mjds_end = mjds+(60.*(MaxDwell+ObsMin))      
         else:
             return {          'Calibrators':'None',
                               'CalSep':0,
                               'CalRA':0,
                               'CalDec':0}
         
-        alt_start = tkpcoords.altaz(mjds_start, cal.ra, cal.dec, lat=52.9088)[0]
-        alt_end = tkpcoords.altaz(mjds_end, cal.ra, cal.dec, lat=52.9088)[0]
+        alt_start = calcAltAz(timeStart,RA,Dec) #tkpcoords.altaz(mjds_start, cal.ra, cal.dec, lat=52.9088)[0]
+        alt_end = calcAltAz(timeEnd,RA,Dec) #tkpcoords.altaz(mjds_end, cal.ra, cal.dec, lat=52.9088)[0]
         if septmp < separation and alt_start > AltCut and alt_end > AltCut:
             separation = septmp
             optcal = cal.src
@@ -253,13 +284,13 @@ def find_cal(mjds,RA, Dec, index):
 
 
 ################# Write the XML for LOFAR #################
-def generateXML(GRB,RA,Dec,CalRA,CalDec,start,maxDur,minDur):
-    # this is particularly ugly so I suspect there is a better way?
+def generateXML(GRB,RA,Dec,CalRA,CalDec,start,maxDur,minDur,end,calname,startCal,endCal):
+    # this is particularly ugly so I suspect there is a better way? Also specific for the sgrb_template.xml
     
-    tree = ET.parse('template1.xml')
+    tree = ET.parse(template)
     root = tree.getroot()
     for child in root.iter('userName'):
-        child.text = "rowlinson"
+        child.text = username
     for child in root.findall('contactInformation'):
         for child2 in child.findall('name'):
             child2.text = Name
@@ -276,65 +307,89 @@ def generateXML(GRB,RA,Dec,CalRA,CalDec,start,maxDur,minDur):
         for child2 in child.findall('projectReference'):
             for child3 in child2.findall('ProjectCode'):
                 child3.text = ProjectCode
-        for child2 in child.findall('container'):
+        for child2 in child.iter('container'):
             for child3 in child2.findall('folder'):
                 for child4 in child3.findall('name'):
-                    child4.text = GRB
+                    if child4.text == "TestOpened_1":
+                        child4.text = 'Trig'+str(GRB)
         for child2 in child.findall('activity'):
             for child3 in child2.findall('observation'):
                 for child4 in child3.findall('timeWindowSpecification'):
-                    for child5 in child4.findall('startTime'):
+                    for child5 in child4.findall('minStartTime'):
                         child5.text = start
+                    for child5 in child4.findall('maxEndTime'):
+                        child5.text = end
                     for child5 in child4.findall('duration'):
                         for child6 in child5.findall('duration'):
                             child6.text="PT"+str(int(maxDur)*60)+"S"
+                for child4 in child3.findall('name'):
+                    if child4.text == "3C295/1/TO":
+                        child4.text=calname+'/1/TO'
+                        for child6 in child3.findall('timeWindowSpecification'):
+                            for child5 in child6.findall('minStartTime'):
+                                child5.text = startCal
+                            for child5 in child6.findall('maxEndTime'):
+                                child5.text = endCal
+                for child4 in child3.findall('description'):
+                    if child4.text == "3C295/1/TO (Target Observation)":
+                        child4.text=calname+'/1/TO (Target Observation)'
         for child2 in child.findall('activity'):
             for child3 in child2.findall('measurement'):
                 for child4 in child3.iter('name'):
                     if child4.text == "Target":
+ #                       child4.text = 'Trig'+str(GRB)
                         for child5 in child3.findall('ra'):
                             child5.text = str(RA)
                         for child5 in child3.findall('dec'):
                             child5.text = str(Dec)
                     if child4.text == "Calibrator":
+ #                       child4.text = calname
                         for child5 in child3.findall('ra'):
                             child5.text = str(CalRA)
                         for child5 in child3.findall('dec'):
                             child5.text = str(CalDec)
-    tree.write(str(RA)+'_'+str(Dec)+'.xml')
+    tree.write(str(GRB)+'.xml',xml_declaration=True)
     return str(GRB)+'.xml'
 
 def writeXMLfiles(GRB,time,RA, Dec,calibrator,index):
     if index != 0:
-        starttime = time
+        starttime = time+timedelta(minutes=MinDwell)
         if index == 1:
-            start=starttime.strftime("%Y-%m-%dT%H%M%S")
+            start=starttime.strftime("%Y-%m-%dT%H:%M:%S")
             maxDur = ObsMax
+            endtime =  starttime+timedelta(minutes=maxDur)
+            end = endtime.strftime("%Y-%m-%dT%H:%M:%S")
         elif index == 2:
-            start=starttime.strftime("%Y-%m-%dT%H%M%S")
+            start=starttime.strftime("%Y-%m-%dT%H:%M:%S")
             maxDur = ObsMin
+            endtime =  starttime+timedelta(minutes=maxDur)
+            end = endtime.strftime("%Y-%m-%dT%H:%M:%S")
         elif index == 3:
             starttime=starttime+timedelta(seconds=MaxDwell*60.)
-            start=starttime.strftime("%Y-%m-%dT%H%M%S")
+            start=starttime.strftime("%Y-%m-%dT%H:%M:%S")
             maxDur = ObsMax
+            endtime =  starttime+timedelta(minutes=maxDur)
+            end = endtime.strftime("%Y-%m-%dT%H:%M:%S")
         elif index == 4:
             starttime=starttime+timedelta(seconds=MaxDwell*60.)
-            start=starttime.strftime("%Y-%m-%dT%H%M%S")
+            start=starttime.strftime("%Y-%m-%dT%H:%M:%S")
             maxDur = ObsMin
-        xmlname = generateXML(GRB,RA,Dec,calibrator['CalRA'],calibrator['CalDec'],start,maxDur,ObsMin)
+            endtime =  starttime+timedelta(minutes=maxDur)
+            end = endtime.strftime("%Y-%m-%dT%H:%M:%S")
+
+        startCal = endtime+timedelta(minutes=2.)
+        startCal = startCal.strftime("%Y-%m-%dT%H:%M:%S")
+        endCal = endtime+timedelta(minutes=20.)
+        endCal = endCal.strftime("%Y-%m-%dT%H:%M:%S")
+        xmlname = generateXML(GRB,RA,Dec,calibrator['CalRA'],calibrator['CalDec'],start,maxDur,ObsMin,end,calibrator['Calibrators'],startCal,endCal)
         return xmlname
 
 #test generateXML
 #generateXML(123.4,56.7,10.2,45.3,"2018-11-23T15:21:44","7200","720")
 
 def sendXMLtoLOFAR(xmlname): # code received from Auke last year, needs updating...
-    url = "http://scu199.control.lofar:8000/triggers/"
-    xml_file = xmlname
-    xml_string = open(xml_file).read()
-    headers={'Content-Type': 'application/xml'}
-    result = requests.post(url, data=xml_string, headers=headers)
-    
-
+    os.system("echo curl --insecure --data-binary @"+xmlname+" --netrc 'https://proxy.lofar.eu/rtrest/triggers/?format=json'")
+    #os.system("curl --insecure --data-binary @"+xmlname+" --netrc 'https://proxy.lofar.eu/rtrest/triggers/?format=json'")
 
     
 if __name__ == '__main__':
