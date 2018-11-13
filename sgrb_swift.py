@@ -1,5 +1,7 @@
 #!/home/antoniar/JupyterEnv/bin/python
 
+#################### WARNING: Turn off sending triggers when testing!!!!!!!!!!!!!
+
 import numpy as np
 import scipy as sp
 import os
@@ -13,8 +15,10 @@ import six
 import voeventparse
 import pandas
 import requests
+import pytz
 #import xml.etree.ElementTree as ET
 from lxml import etree as ET
+import lofar_maintenance
 
 import astropy.units as u
 from astropy.time import Time
@@ -41,14 +45,14 @@ MinDwell=4. # minimum dwell time (while testing)
 LOFARlocation = EarthLocation(lat=52.9088*u.deg,lon=6.8689*u.deg,height=0.*u.m)
 CalObsT = 10.
 
-Name = "<input>"
-username = '<input>'
-email = "<input>"
-phoneNumber = "<input>"
-Affiliation = "<input>"
-ProjectCode = '<input>'
+Name = "Antonia Rowlinson"
+username = 'antoniar'
+email = "rowlinson@astron.nl"
+phoneNumber = "799"
+Affiliation = "ASTRON"
+ProjectCode = 'LC10_012'
 #ProjectCode = 'test-triggers-low'
-GRB_trig_dur = 100.
+GRB_trig_dur = 1.
 template = 'sgrb_template.xml'
 
 #################
@@ -83,7 +87,14 @@ def handle_voevent(v):
         #logger.info('is GRB')
         RA, Dec, time, parameters, ivorn = handle_grb(v)
         logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+','+format(time)+','+str(RA)+','+str(Dec)+','+format(parameters[None]['Integ_Time']['value'])+','+format(parameters['Misc_Flags']['Delayed_Transmission']['value']))
-        filterSGRBs(RA, Dec, time, parameters, v)
+        now = datetime.utcnow().replace(tzinfo=pytz.utc)
+        logger.info(now)
+        logger.info(time)
+        logger.info(now - time)
+        if now-time < timedelta(minutes=10):
+            filterSGRBs(RA, Dec, now, parameters, v)
+        else:
+            logger.info('Delayed trigger, arriving >10min after GRB')
     elif is_swift_pointing(v):
         #logger.info('is Swift pointing')
         handle_pointing(v)
@@ -166,26 +177,24 @@ def filterSGRBs(RA, Dec, time, parameters,v):
         logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Integration time check passed. '+str(parameters[None]['Integ_Time']['value'])+','+str(GRB_trig_dur))
         #mjds=86400.*tkpcoords.julian_date(time,modified=True)
         # Altitude needs to be greater than the input
-        calcAlt =  calcAltAz(time,RA,Dec) #tkpcoords.altaz(mjds, RA, Dec, lat=52.9088)[0]
-        logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Checking altitude: '+str(calcAlt)+','+str(AltCut))
-        if calcAlt > AltCut:
+        #calcAlt =  calcAltAz(time,RA,Dec) #tkpcoords.altaz(mjds, RA, Dec, lat=52.9088)[0]
+        #logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Checking altitude: '+str(calcAlt)+','+str(AltCut))
+        #if calcAlt > AltCut:
             # Source needs to stay above horizon
-            index = horizon(time,RA, Dec)
-            logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Index from altitude check: '+str(index))
-            if index != 0:
-                # we need a calibrator source
-                calibrator = find_cal(time,RA, Dec,index)
-                if calibrator['Calibrators'] != 'None':
-                    logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Calibrator found: '+str(calibrator['Calibrators'])+','+str(calibrator['CalRA'])+','+str(calibrator['CalDec']))
-                    xmlname = writeXMLfiles(format(parameters[None]['TrigID']['value']),time,RA, Dec,calibrator,index)
-                    logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'XML file written to: '+xmlname)
-                    sendXMLtoLOFAR(xmlname)
-                else:
-                    logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Failed to find a calibrator')
+        index = horizon(time,RA, Dec)
+        logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Index from altitude check: '+str(index))
+        if index != 0:
+            # we need a calibrator source
+            calibrator = find_cal(time,RA, Dec,index)
+            if calibrator['Calibrators'] != 'None':
+                logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Calibrator found: '+str(calibrator['Calibrators'])+','+str(calibrator['CalRA'])+','+str(calibrator['CalDec']))
+                xmlname = writeXMLfiles(format(parameters[None]['TrigID']['value']),time,RA, Dec,calibrator,index)
+                logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'XML file written to: '+xmlname)
+                sendXMLtoLOFAR(xmlname)
             else:
-                logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Not above horizon within time constraints')
+                logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Failed to find a calibrator')
         else:
-            logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Below horizon')
+            logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Not above horizon within time constraints')
     else:
         logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Likely long GRB, '+format(parameters[None]['Integ_Time']['value']))
     #else:
@@ -199,7 +208,7 @@ def horizon(time,RA,Dec):
             az2=calcAltAz(time+timedelta(minutes=(MaxDwell+ObsMax)),RA,Dec) #tkpcoords.altaz(mjds+(60.*(ObsMax+MaxDwell)), RA, Dec, lat=52.9088)[0]
             az1=calcAltAz(time+timedelta(minutes=(MaxDwell+ObsMin)),RA,Dec) #tkpcoords.altaz(mjds+(60.*(ObsMin+MaxDwell)), RA, Dec, lat=52.9088)[0]
             #logger.info(format(mjds)+','+format(mjds+60.*(MaxDwell))+','+format(MaxDwell))
-            logger.info(format(az0)+','+format(az0b)+','+format(az2)+','+format(az1))
+            #logger.info(format(az0)+','+format(az0b)+','+format(az2)+','+format(az1))
             if az0<AltCut: # the source is below minimum at start
                 return 0   
             if az0b>AltCut: # wait till dwell time to start observations
@@ -284,11 +293,29 @@ def find_cal(time,RA, Dec, index):
 
 
 ################# Write the XML for LOFAR #################
-def generateXML(GRB,RA,Dec,CalRA,CalDec,start,maxDur,minDur,end,calname,startCal,endCal):
+def generateXML(GRB,RA,Dec,CalRA,CalDec,start,maxDur,minDur,end,calname,startCal,endCal,stations):
     # this is particularly ugly so I suspect there is a better way? Also specific for the sgrb_template.xml
     
     tree = ET.parse(template)
     root = tree.getroot()
+
+    if len(stations) != 0:
+        for station in stations:
+            for child in root.iter('specification'):
+                for child2 in child.findall('activity'):
+                    for child3 in child2.findall('observation'):
+                        for child4 in child3.findall('stationSelectionSpecification'):
+                            for child5 in child4.findall('stationSelection'):
+                                for child6 in child5.findall('stations'):
+                                    for child7 in child6.findall('station'):
+                                        for child8 in child7.findall('name'):
+                                            #print(child8.tag, child8.attrib)
+                                            #print child8.text
+                                            if child8.text==station:
+                                                child6.remove(child7)
+                                                child7.remove(child8)
+                                                logger.info(station+' is removed due to maintenance')
+    
     for child in root.iter('userName'):
         child.text = username
     for child in root.findall('contactInformation'):
@@ -321,7 +348,8 @@ def generateXML(GRB,RA,Dec,CalRA,CalDec,start,maxDur,minDur,end,calname,startCal
                         child5.text = end
                     for child5 in child4.findall('duration'):
                         for child6 in child5.findall('duration'):
-                            child6.text="PT"+str(int(maxDur)*60)+"S"
+                            if child6.text == "PT7200S":
+                                child6.text="PT"+str(int(maxDur)*60)+"S"
                 for child4 in child3.findall('name'):
                     if child4.text == "3C295/1/TO":
                         child4.text=calname+'/1/TO'
@@ -330,6 +358,10 @@ def generateXML(GRB,RA,Dec,CalRA,CalDec,start,maxDur,minDur,end,calname,startCal
                                 child5.text = startCal
                             for child5 in child6.findall('maxEndTime'):
                                 child5.text = endCal
+                                for child5 in child4.findall('duration'):
+                                    for child6 in child5.findall('duration'):
+                                        if child6.text == "PT120S":
+                                            child6.text="PT"+str(int(CalObsT)*60)+"S"
                 for child4 in child3.findall('description'):
                     if child4.text == "3C295/1/TO (Target Observation)":
                         child4.text=calname+'/1/TO (Target Observation)'
@@ -348,6 +380,7 @@ def generateXML(GRB,RA,Dec,CalRA,CalDec,start,maxDur,minDur,end,calname,startCal
                             child5.text = str(CalRA)
                         for child5 in child3.findall('dec'):
                             child5.text = str(CalDec)
+                              
     tree.write(str(GRB)+'.xml',xml_declaration=True)
     return str(GRB)+'.xml'
 
@@ -379,9 +412,10 @@ def writeXMLfiles(GRB,time,RA, Dec,calibrator,index):
 
         startCal = endtime+timedelta(minutes=2.)
         startCal = startCal.strftime("%Y-%m-%dT%H:%M:%S")
-        endCal = endtime+timedelta(minutes=20.)
-        endCal = endCal.strftime("%Y-%m-%dT%H:%M:%S")
-        xmlname = generateXML(GRB,RA,Dec,calibrator['CalRA'],calibrator['CalDec'],start,maxDur,ObsMin,end,calibrator['Calibrators'],startCal,endCal)
+        endCaltmp = endtime+timedelta(minutes=20.)
+        endCal = endCaltmp.strftime("%Y-%m-%dT%H:%M:%S")
+        stations = check_LOFAR_maintenance(starttime,endCaltmp)
+        xmlname = generateXML(GRB,RA,Dec,calibrator['CalRA'],calibrator['CalDec'],start,maxDur,ObsMin,end,calibrator['Calibrators'],startCal,endCal,stations)
         return xmlname
 
 #test generateXML
@@ -389,7 +423,13 @@ def writeXMLfiles(GRB,time,RA, Dec,calibrator,index):
 
 def sendXMLtoLOFAR(xmlname): # code received from Auke last year, needs updating...
     os.system("echo curl --insecure --data-binary @"+xmlname+" --netrc 'https://proxy.lofar.eu/rtrest/triggers/?format=json'")
-    #os.system("curl --insecure --data-binary @"+xmlname+" --netrc 'https://proxy.lofar.eu/rtrest/triggers/?format=json'")
+    os.system("curl --insecure --data-binary @"+xmlname+" --netrc 'https://proxy.lofar.eu/rtrest/triggers/?format=json'")
+
+def check_LOFAR_maintenance(start,end):
+    start=start.strftime("%Y-%m-%d %H:%M:%S")
+    end=end.strftime("%Y-%m-%d %H:%M:%S")
+    stations=lofar_maintenance.getMaintenance(start,end)
+    return stations
 
     
 if __name__ == '__main__':
