@@ -81,7 +81,6 @@ def calcAltAz(time,RA,Dec):
     
 
 def handle_voevent(v):
-    # edited
     #logger.info(format(v.attrib['ivorn']))
     if is_grb(v):
         #logger.info('is GRB')
@@ -110,8 +109,6 @@ def is_grb(v):
     ivorn = v.attrib['ivorn']
     if ivorn.find("ivo://nasa.gsfc.gcn/SWIFT#BAT_GRB_Pos") == 0:
         return True
-    #if ivorn.find("ivo://nasa.gsfc.gcn/SWIFT#BAT_SubSubThresh_Pos") == 0: ##
-    #    return True
     return False
 
 def is_swift_pointing(v):        
@@ -141,10 +138,6 @@ def handle_grb(v):
     dec=coords.dec
     time = voeventparse.convenience.get_event_time_as_utc(v, index=0) # this is a datetime.datetime object
     parameters = voeventparse.convenience.pull_params(v) 
-#    integ_time = parameters[None]['Integ_Time']['value']
-#    text = "Swift packet received, coords are {}".format(coords)
-#    logger.info(text)
-#    handle_other(v)
     return ra, dec, time, parameters, ivorn
 
 def handle_pointing(v):
@@ -170,17 +163,10 @@ def handle_other(v):
 def filterSGRBs(RA, Dec, time, parameters,v):
     # Trig_dur needs to be less than the input, readFromEvent needs to be checked.
     logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'In SGRB filtering code')
-#    if (parameters['Misc_Flags']['Delayed_Transmission']['value'] != False): #first only trigger on non-delayed bursts
-        #logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'prompt transmission')
     if float(parameters[None]['Integ_Time']['value']) < GRB_trig_dur:
         # calculate time of event in mjds
         logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Integration time check passed. '+str(parameters[None]['Integ_Time']['value'])+','+str(GRB_trig_dur))
-        #mjds=86400.*tkpcoords.julian_date(time,modified=True)
-        # Altitude needs to be greater than the input
-        #calcAlt =  calcAltAz(time,RA,Dec) #tkpcoords.altaz(mjds, RA, Dec, lat=52.9088)[0]
-        #logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Checking altitude: '+str(calcAlt)+','+str(AltCut))
-        #if calcAlt > AltCut:
-            # Source needs to stay above horizon
+        # Source needs to stay above horizon
         index = horizon(time,RA, Dec)
         logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Index from altitude check: '+str(index))
         if index != 0:
@@ -197,33 +183,30 @@ def filterSGRBs(RA, Dec, time, parameters,v):
             logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Not above horizon within time constraints')
     else:
         logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Likely long GRB, '+format(parameters[None]['Integ_Time']['value']))
-    #else:
-    #    logger.info('TrigID: '+format(parameters[None]['TrigID']['value'])+', '+'Delayed trigger')
 
 ################# Check the elevation of the source #################
 
 def horizon(time,RA,Dec):
-            az0=calcAltAz(time+timedelta(minutes=MaxDwell),RA,Dec) #tkpcoords.altaz(mjds+(60.*(MaxDwell)), RA, Dec, lat=52.9088)[0]
-            az0b=calcAltAz(time+timedelta(minutes=MaxDwell),RA,Dec) #tkpcoords.altaz(mjds, RA, Dec, lat=52.9088)[0]
-            az2=calcAltAz(time+timedelta(minutes=(MaxDwell+ObsMax)),RA,Dec) #tkpcoords.altaz(mjds+(60.*(ObsMax+MaxDwell)), RA, Dec, lat=52.9088)[0]
-            az1=calcAltAz(time+timedelta(minutes=(MaxDwell+ObsMin)),RA,Dec) #tkpcoords.altaz(mjds+(60.*(ObsMin+MaxDwell)), RA, Dec, lat=52.9088)[0]
-            #logger.info(format(mjds)+','+format(mjds+60.*(MaxDwell))+','+format(MaxDwell))
-            #logger.info(format(az0)+','+format(az0b)+','+format(az2)+','+format(az1))
-            if az0<AltCut: # the source is below minimum at start
+            az0=calcAltAz(time+timedelta(minutes=MaxDwell),RA,Dec) # altitude at max dwell time
+            az0b=calcAltAz(time+timedelta(minutes=MaxDwell),RA,Dec) # altitude at min dwell time
+            az2=calcAltAz(time+timedelta(minutes=(MaxDwell+ObsMax)),RA,Dec) # altitude at maximum end time
+            az1=calcAltAz(time+timedelta(minutes=(MaxDwell+ObsMin)),RA,Dec) # altitude at minimum end time
+
+            if az0<AltCut: # the source remains below minimum elevation by the max dwell time
                 return 0   
-            if az0b>AltCut: # wait till dwell time to start observations
-                if az1<AltCut: # the source sets before the minimum observation duration
+            if az0b>AltCut: # source is above min elevation at start of observation
+                if az1<AltCut: # the source sets before the minimum observation duration so don't observe
                     return 0
-                if az2>AltCut: # the source is above the minimum for the whole observation
+                if az2>AltCut: # the source is above the minimum for the whole observation, observe for full observation
                     return 1
-                if az1>AltCut and az2<AltCut: # the source drops between the max and min time
+                if az1>AltCut and az2<AltCut: # the source drops between the max and min time, so only observe for the minimum
                     return 2
-            if az0>AltCut and az0b<AltCut: # wait till dwell time to start observations
-                if az1<AltCut: # the source sets before the minimum observation duration
+            if az0>AltCut and az0b<AltCut: # source rises above min elevation during dwell time, wait till dwell time to start observations
+                if az1<AltCut: # the source sets before the minimum observation duration so don't observe
                     return 0
-                if az2>AltCut: # the source is above the minimum for the whole observation
+                if az2>AltCut: # the source is above the minimum for the whole observation, so observe for full duration
                     return 3
-                if az1>AltCut and az2<AltCut: # the source drops between the max and min time
+                if az1>AltCut and az2<AltCut: # the source drops between the max and min time, so only observe for the minimum
                     return 4
         
     # if 1 is returned, ask for the full time immediately, no constraints
@@ -247,32 +230,25 @@ def find_cal(time,RA, Dec, index):
         if index == 1:
             timeStart = startT+timedelta(minutes=ObsMax+MaxDwell+2.)
             timeEnd = timeStart+timedelta(minutes=CalObsT)
-            #mjds_start = mjds
-            #mjds_end = mjds+(60.*(MaxDwell+ObsMax))
         elif index == 2:
             timeStart = startT+timedelta(minutes=ObsMin+MaxDwell+2.)
             timeEnd = timeStart+timedelta(minutes=CalObsT)
-            #mjds_start = mjds
-            #mjds_end = mjds+(60.*(MaxDwell+ObsMin))            
         elif index == 3:
             timeStart = startT+timedelta(minutes=ObsMax+MaxDwell+2.)
             timeEnd = timeStart+timedelta(minutes=CalObsT)
-            #mjds_start = mjds+(60.*(MaxDwell))  
-            #mjds_end = mjds+(60.*(MaxDwell+ObsMax))              
         elif index == 4:
             timeStart = startT+timedelta(minutes=ObsMin+MaxDwell+2.)
             timeEnd = timeStart+timedelta(minutes=CalObsT)
-            #mjds_start = mjds+(60.*(MaxDwell))
-            #mjds_end = mjds+(60.*(MaxDwell+ObsMin))      
         else:
             return {          'Calibrators':'None',
                               'CalSep':0,
                               'CalRA':0,
                               'CalDec':0}
         
-        alt_start = calcAltAz(timeStart,RA,Dec) #tkpcoords.altaz(mjds_start, cal.ra, cal.dec, lat=52.9088)[0]
-        alt_end = calcAltAz(timeEnd,RA,Dec) #tkpcoords.altaz(mjds_end, cal.ra, cal.dec, lat=52.9088)[0]
+        alt_start = calcAltAz(timeStart,RA,Dec) # check altitude of calibrator at start of observation
+        alt_end = calcAltAz(timeEnd,RA,Dec) # check altitude of calibrator at end of observation
         if septmp < separation and alt_start > AltCut and alt_end > AltCut:
+            # if calibrator is above min elevation for duration and is closer than previous calibrator, it becomes the optimum calibrator
             separation = septmp
             optcal = cal.src
             optra = cal.ra
@@ -309,8 +285,6 @@ def generateXML(GRB,RA,Dec,CalRA,CalDec,start,maxDur,minDur,end,calname,startCal
                                 for child6 in child5.findall('stations'):
                                     for child7 in child6.findall('station'):
                                         for child8 in child7.findall('name'):
-                                            #print(child8.tag, child8.attrib)
-                                            #print child8.text
                                             if child8.text==station:
                                                 child6.remove(child7)
                                                 child7.remove(child8)
@@ -369,13 +343,11 @@ def generateXML(GRB,RA,Dec,CalRA,CalDec,start,maxDur,minDur,end,calname,startCal
             for child3 in child2.findall('measurement'):
                 for child4 in child3.iter('name'):
                     if child4.text == "Target":
- #                       child4.text = 'Trig'+str(GRB)
                         for child5 in child3.findall('ra'):
                             child5.text = str(RA)
                         for child5 in child3.findall('dec'):
                             child5.text = str(Dec)
                     if child4.text == "Calibrator":
- #                       child4.text = calname
                         for child5 in child3.findall('ra'):
                             child5.text = str(CalRA)
                         for child5 in child3.findall('dec'):
